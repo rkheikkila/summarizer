@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 
-from nltk.corpus import stopwords
-
 import networkx 
-import nltk
+import spacy
 
 import itertools as it
 import math
@@ -12,24 +10,8 @@ import re
 default_sents = 3
 default_kp = 5
 
-# Tokenization regexp from the NLTK Book
-pattern = r"""(?x)
-              (?:[A-Z]\.)+       # abbreviations, e.g. U.S.A.
-              |\d+(?:\.\d+)?%?   # numbers, incl. currency and percentages
-              |\w+(?:[-']\w+)*   # words w/ optional internal hyphens/apostrophe
-              |(?:[+/\-@&*])     # special characters with meanings
-"""
+nlp_pipeline = spacy.load('en')
 
-stopwords = stopwords.words('english')
-tokenizer = nltk.tokenize.RegexpTokenizer(pattern)
-wnl = nltk.WordNetLemmatizer()
-
-
-def normalise(word):
-    word = word.lower()
-    word = wnl.lemmatize(word)
-    return word
-    
     
 def summarize_page(url, sent_count = default_sents, kp_count = default_kp):
     import bs4
@@ -41,6 +23,7 @@ def summarize_page(url, sent_count = default_sents, kp_count = default_kp):
         # Find the tag with most paragraph tags as direct children
         body = max(soup.find_all(), 
                    key=lambda tag: len(tag.find_all('p', recursive=False)))
+                   
         paragraphs = map(lambda p: p.text, body('p'))
         text = ' '.join(paragraphs)
         return summarize(text, sent_count, kp_count)
@@ -54,8 +37,8 @@ def summarize(text, sent_count = default_sents, kp_count = default_kp):
     if desired.
     
     Keyword arguments:
-    sent_count -- summary size (default 0.2)
-    kp_count -- number of keyphrases (default 5)
+    sent_count -- summary size 
+    kp_count -- number of keyphrases 
     
     If the keyword arguments are less than one, they will be considered as a
     ratio of the length of text or total number of candidate keywords. If they 
@@ -65,122 +48,143 @@ def summarize(text, sent_count = default_sents, kp_count = default_kp):
     """
     summary = ""
     
-    sents = [(idx, sent) for idx, sent in enumerate(nltk.sent_tokenize(text))]
-    words = [[normalise(word) for word in tokenizer.tokenize(sent)] 
-             for (idx, sent) in sents]
-        
+    doc = nlp_pipeline(text)
     
     if sent_count > 0:
-        summary = text_summary(sents, words, sent_count)
+        summary = text_summary(doc, sent_count)
                           
     top_phrases = []
     
     if kp_count > 0:
-        words = list(it.chain.from_iterable(words))
-        top_phrases = find_keyphrases(words, kp_count)
+        top_phrases = find_keyphrases(doc, kp_count)
                                  
     return (summary, top_phrases)
     
 
-def text_summary(sents, words, sent_count):
+def text_summary(doc, sent_count):
     """
     Summarizes given text using TextRank algorithm.
     
-    :param sents: iterable of the sentences of the text
-    :param words: list of lists containing the normalised words of each sentence
+    :param doc: a spacy.Doc object
     :param sent_count: number (/ratio) of sentences in the summary
     """
+    sents = list(enumerate(doc.sents))
     sent_graph = networkx.Graph()
     sent_graph.add_nodes_from(idx for idx, sent in sents)
     
     for i in sent_graph.nodes_iter():
         for j in sent_graph.nodes_iter():
             if i != j and not sent_graph.has_edge(i,j):
-                similarity = sent_similarity(words[i], words[j])
+                similarity = sent_similarity(sents[i][1], sents[j][1])
                 if similarity != 0:
                     sent_graph.add_edge(i,j, weight=similarity)
                     
-    sent_ranks = networkx.pagerank(sent_graph)
+    sent_ranks = networkx.pagerank_numpy(sent_graph)
     
     if 0 < sent_count < 1:
         sent_count = round(sent_count * len(sent_ranks))
     sent_count = int(sent_count)
         
     top_indices = [idx for idx, rank in
-                   sorted(sent_ranks.items(), key=lambda s: s[1], 
-                          reverse=True)[:sent_count]]
+                   sorted(sent_ranks.items(), key=lambda s: s[1], reverse=True)[:sent_count]]
                           
     # Return the key sentences in chronological order
     top_sents = map(lambda i: sents[i][1], sorted(top_indices))
-    summary = ' '.join(top_sents)
+    summary = ' '.join(sent.text for sent in top_sents)
     
     return summary
     
-    
-def candidate_keywords(words):
-    # Select adjectives and nouns
-    good_tags = set(['JJ', 'JJR', 'JJS', 'NN', 'NNS', 'NNP', 'NNPS'])
-    pos_tokens = nltk.pos_tag(words)
-    candidates = [word for word, tag in pos_tokens 
-                  if tag in good_tags and word not in stopwords]
-    return candidates
-    
      
-def find_keyphrases(words, kp_count):
+def find_keyphrases(doc, kp_count):
     """
     Finds keyphrases of given text using TextRank algorithm.
     
-    :param words: list of normalised words in the text
+    :param doc: a spacy.Doc object
     :param kp_count: number (/ratio) of keyphrases
     """
-    word_graph = networkx.Graph()
-    candidates = candidate_keywords(words)
-    word_graph.add_nodes_from(set(candidates))
-    add_edges(candidates, word_graph)
+    tokens = [normalise(tok) for tok in doc]
+    candidates = [normalise(*token) for token in ngrams(doc, 1)]
     
-    kw_ranks = networkx.pagerank(word_graph)
+    word_graph = networkx.Graph()
+    word_graph.add_nodes_from(set(candidates))
+    word_graph.add_edges_from(zip(candidates, candidates[1:]))
+    
+    kw_ranks = networkx.pagerank_numpy(word_graph)
     
     if 0 < kp_count < 1:
         kp_count = round(kp_count * len(kw_ranks))
     kp_count = int(kp_count)
         
-    top_words = {word : rank
-                 for word, rank in 
-                 sorted(kw_ranks.items(),
-                        key=lambda w: w[1],
-                        reverse=True)}
+    top_words = {word : rank for word, rank in kw_ranks.items()}
                         
     keywords = set(top_words.keys())
     phrases = {}
     
-    word_iter = iter(words)
-    for word in word_iter:
-        if word in keywords:
-            kp_words = [word]
-            kp_words.extend(it.takewhile(lambda w: w in keywords, word_iter))
+    for tok in tokens:
+        if tok in keywords:
+            kp_words = [tok]
+            kp_words.extend(it.takewhile(lambda t: t in keywords, tokens))
             n = len(kp_words)
             avg_rank = sum(top_words[w] for w in kp_words) / n
             phrases[' '.join(kp_words)] = avg_rank
     
     top_phrases = [kp for kp, rank in 
-                   sorted(phrases.items(), 
-                          key=lambda w: w[1], 
-                          reverse=True)[:kp_count]]
+                   sorted(phrases.items(), key=lambda w: w[1], reverse=True)[:kp_count]]
                    
     return top_phrases    
                           
                           
-def add_edges(word_list, graph):
+def ngrams(doc, n, filter_stopwords=True, good_tags={'NOUN', 'PROPN', 'ADJ'}):
     """
-    Adds edges to the keyword graph. This function considers bigrams, i.e.
-    collocated words.
+    Extracts a list of n-grams from a sequence of spacy.Tokens. Optionally 
+    filters stopwords and parts-of-speech tags.
+    
+    :param doc: sequence of spacy.Tokens
+    :param n: number of tokens in an n-gram
+    :param filter_stopwords: flag for stopword filtering
+    :param good_tags: set of wanted POS tags
     """
-    graph.add_edges_from( zip(word_list, word_list[1:]) )
+    ngrams = (doc[i:i+n] for i in range(len(doc) - n + 1))
+    ngrams = (ngram for ngram in ngrams 
+              if not any(w.is_space or w.is_punct for w in ngram))
+    
+    if filter_stopwords:
+        ngrams = (ngram for ngram in ngrams
+                  if not ngram[0].is_stop and not ngram[-1].is_stop)
+    if good_tags:
+        ngrams = (ngram for ngram in ngrams 
+                  if all(word.pos_ in good_tags for word in ngram))
+    
+    for ngram in ngrams:
+        yield ngram
+        
+        
+def normalise(term):
+    """
+    Parses a token or span of tokens into a lemmatized string.
+    Proper nouns are not lemmatized.
+    
+    :param term: spacy.Token or spacy.Span to be lemmatized
+    """
+    if isinstance(term, spacy.tokens.token.Token):
+        return term.text if term.pos_ == 'PROPN' else term.lemma_
+    elif isinstance(term, spacy.tokens.span.Span):
+        return ' '.join(word.text if word.pos_ == 'PROPN' else word.lemma_
+                        for word in term)
+    else:
+        msg = "Normalisation requires a Token or Span, not {}.".format(type(term))
+        raise TypeError(msg)
  
  
-def sent_similarity(word_list1, word_list2):
-    s1 = set(w for w in word_list1 if w not in stopwords)
-    s2 = set(w for w in word_list1 if w not in stopwords)
+def sent_similarity(sent1, sent2):
+    """
+    Calculates a similary measure between two sentences.
+    
+    :param sent1: a spacy.Span object
+    :param sent2: a spacy.Span object
+    """
+    s1 = set(normalise(tok) for tok in sent1 if not tok.is_stop)
+    s2 = set(normalise(tok) for tok in sent2 if not tok.is_stop)
     
     common_words = len(s1 & s2)
     normalizing_factor = math.log10(len(s1) * len(s2))
@@ -218,5 +222,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     res = summarize_page(args.url, args.sent_count, args.kp_count)
-    print("{} \nKeyphrases: {}".format(res[0].encode("utf-8"), res[1]))
+    print("{} \nKeyphrases: {}".format(res[0], res[1]))
     
