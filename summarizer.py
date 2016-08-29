@@ -20,6 +20,17 @@ nlp_pipeline = spacy.load('en')
 
 
 def summarize_page(url, sent_count=default_sents, kp_count=default_kp):
+    """
+    Retrieves a web page, finds its body of content and summarizes it.
+
+    Args:
+        url: the url of the website to summarize
+        sent_count: number(/ratio) of sentences in the summary
+        kp_count: number(/ratio) of keyphrases in the summary
+    Returns:
+        A tuple (summary, keyphrases). Any exception will be returned
+        as a tuple (message, []).
+    """
     import bs4
     import requests
 
@@ -42,15 +53,17 @@ def summarize(text, sent_count=default_sents, kp_count=default_kp, idf=None):
     Produces a summary of a given text and also finds the keyphrases of the text
     if desired.
     
-    Keyword arguments:
-    sent_count -- summary size 
-    kp_count -- number of keyphrases 
-    
-    If the keyword arguments are less than one, they will be considered as a
-    ratio of the length of text or total number of candidate keywords. If they 
+    Args:
+        text: the text string to summarize
+        sent_count: number of sentences in the summary
+        kp_count: number of keyphrases in the summary
+        idf: a dictionary (string, float) of inverse document frequencies
+    Returns:
+        A tuple (summary, keyphrases).
+
+    If sent_count and kp_count are less than one, they will be considered as a
+    ratio of the length of text or total number of candidate keywords. If they
     are more than one, they will be considered as a fixed count.
-    
-    Returns a tuple containing the summary and the list of keyphrases.
     """
     summary = ""
 
@@ -70,9 +83,12 @@ def summarize(text, sent_count=default_sents, kp_count=default_kp, idf=None):
 def text_summary(doc, sent_count):
     """
     Summarizes given text using TextRank algorithm.
-    
-    :param doc: a spacy.Doc object
-    :param sent_count: number (/ratio) of sentences in the summary
+
+    Args:
+        doc: a spacy.Doc object
+        sent_count: number (/ratio) of sentences in the summary
+    Returns:
+        Text summary
     """
     sents = list(enumerate(doc.sents))
     sent_graph = networkx.Graph()
@@ -104,8 +120,9 @@ def sent_similarity(sent1, sent2):
     """
     Calculates a similary measure between two sentences.
 
-    :param sent1: a spacy.Span object
-    :param sent2: a spacy.Span object
+    Args:
+        sent1: a spacy.Span object
+        sent2: a spacy.Span object
     """
     s1 = set(normalize(tok) for tok in sent1 if not tok.is_stop)
     s2 = set(normalize(tok) for tok in sent2 if not tok.is_stop)
@@ -121,10 +138,17 @@ def sent_similarity(sent1, sent2):
 
 def sgrank(doc, kp_count, window=1500, idf=None):
     """
-    Extract keyphrases from a text using SGRank algorithm.
-    
-    :param doc: a spacy.Doc object
-    :param window: co-occurence window 
+    Extracts keyphrases from a text using SGRank algorithm.
+
+    Args:
+        doc: a spacy.Doc object
+        kp_count: number of keyphrases
+        window: word co-occurrence window length
+        idf: a dictionary (string, float) of inverse document frequencies
+    Returns:
+        list of keyphrases
+    Raises:
+        TypeError if idf is not dictionary or None
     """
     if isinstance(idf, dict):
         idf = defaultdict(lambda: 1, idf)
@@ -221,10 +245,13 @@ def sgrank(doc, kp_count, window=1500, idf=None):
 
 def textrank(doc, kp_count):
     """
-    Finds keyphrases of given text using TextRank algorithm.
-    
-    :param doc: a spacy.Doc object
-    :param kp_count: number (/ratio) of keyphrases
+    Extracts keyphrases of a text using TextRank algorithm.
+
+    Args:
+        doc: a spacy.Doc object
+        kp_count: number of keyphrases
+    Returns:
+        list of keyphrases
     """
     tokens = [normalize(tok) for tok in doc]
     candidates = [normalize(*token) for token in ngrams(doc, 1)]
@@ -259,15 +286,16 @@ def textrank(doc, kp_count):
 
 def ngrams(doc, n, filter_stopwords=True, good_tags={'NOUN', 'PROPN', 'ADJ'}):
     """
-    Extracts a list of n-grams from a sequence of spacy.Tokens. Optionally
+    Extracts a list of n-grams from a sequence of tokens. Optionally
     filters stopwords and parts-of-speech tags.
-    
-    :param doc: sequence of spacy.Tokens
-    :param n: number of tokens in an n-gram
-    :param filter_stopwords: flag for stopword filtering
-    :param good_tags: set of wanted POS tags
 
-    Returns a generator of spacy.Spans.
+    Args:
+        doc: sequence of spacy.Tokens (for example: spacy.Doc)
+        n: number of tokens in an n-gram
+        filter_stopwords: flag for stopword filtering
+        good_tags: set of accepted part-of-speech tags
+    Returns:
+         a generator of spacy.Spans
     """
     ngrams_ = (doc[i:i + n] for i in range(len(doc) - n + 1))
     ngrams_ = (ngram for ngram in ngrams_
@@ -288,8 +316,13 @@ def normalize(term):
     """
     Parses a token or span of tokens into a lemmatized string.
     Proper nouns are not lemmatized.
-    
-    :param term: spacy.Token or spacy.Span to be lemmatized
+
+    Args:
+        term: a spacy.Token or spacy.Span object
+    Returns:
+        lemmatized string
+    Raises:
+        TypeError if input is not a Token or Span
     """
     if isinstance(term, spacy.tokens.token.Token):
         return term.text if term.pos_ == 'PROPN' else term.lemma_
