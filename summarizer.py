@@ -302,10 +302,11 @@ def textrank(doc, kp_count):
     keywords = set(top_words.keys())
     phrases = {}
 
-    for tok in tokens:
+    tok_iter = iter(tokens)
+    for tok in tok_iter:
         if tok in keywords:
             kp_words = [tok]
-            kp_words.extend(it.takewhile(lambda t: t in keywords, tokens))
+            kp_words.extend(it.takewhile(lambda t: t in keywords, tok_iter))
             n = len(kp_words)
             avg_rank = sum(top_words[w] for w in kp_words) / n
             phrases[' '.join(kp_words)] = avg_rank
