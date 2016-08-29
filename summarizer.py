@@ -48,7 +48,7 @@ def summarize_page(url, sent_count=default_sents, kp_count=default_kp):
         return ("Something went wrong: {}".format(str(e)), [])
 
 
-def summarize(text, sent_count=default_sents, kp_count=default_kp, idf=None):
+def summarize(text, sent_count=default_sents, kp_count=default_kp, idf=None, sg=True):
     """
     Produces a summary of a given text and also finds the keyphrases of the text
     if desired.
@@ -58,6 +58,7 @@ def summarize(text, sent_count=default_sents, kp_count=default_kp, idf=None):
         sent_count: number of sentences in the summary
         kp_count: number of keyphrases in the summary
         idf: a dictionary (string, float) of inverse document frequencies
+        sg: flag for enabling SGRank algorithm. If False, the TextRank algorithm is used instead.
     Returns:
         A tuple (summary, keyphrases).
 
@@ -75,7 +76,10 @@ def summarize(text, sent_count=default_sents, kp_count=default_kp, idf=None):
     top_phrases = []
 
     if kp_count > 0:
-        top_phrases = sgrank(doc, kp_count, idf=idf)
+        if sg:
+            top_phrases = sgrank(doc, kp_count, idf=idf)
+        else:
+            top_phrases = textrank(doc, kp_count)
 
     return (summary, top_phrases)
 
