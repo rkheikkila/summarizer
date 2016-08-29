@@ -42,7 +42,7 @@ def summarize_page(url, sent_count=default_sents, kp_count=default_kp):
                    key=lambda tag: len(tag.find_all('p', recursive=False)))
 
         paragraphs = map(lambda p: p.text, body('p'))
-        text = ' '.join(paragraphs)
+        text = '\n'.join(paragraphs)
         return summarize(text, sent_count, kp_count)
     except Exception as e:
         return ("Something went wrong: {}".format(str(e)), [])
@@ -111,9 +111,8 @@ def text_summary(doc, sent_count):
 
     # Return the key sentences in chronological order
     top_sents = map(lambda i: sents[i][1], sorted(top_indices))
-    summary = ' '.join(sent.text for sent in top_sents)
 
-    return summary
+    return format_output(doc, list(top_sents))
 
 
 def sent_similarity(sent1, sent2):
@@ -134,6 +133,38 @@ def sent_similarity(sent1, sent2):
         return 0
 
     return common_words / normalizing_factor
+
+
+def format_output(doc, sents):
+    """
+    Breaks the summarized text into paragraphs.
+
+    Args:
+        doc: a spacy.Doc object
+        sents: a list of spacy.Spans, the sentences in the summary
+    Returns:
+        Text summary as a string with newlines
+    """
+    sent_iter = iter(sents)
+    output = [next(sent_iter)]
+    par_breaks = (idx for idx, tok in enumerate(doc) if '\n' in tok.text)
+
+    try:
+        # Find the first newline after first sentence
+        idx = next(i for i in par_breaks if i >= output[0].end)
+        for sent in sent_iter:
+            if '\n' not in output[-1].text:
+                if idx < sent.start:
+                    # If there was no newline in the previous sentence
+                    # and there is one in the text between the two sentences, add it
+                    output.append(doc[idx])
+            output.append(sent)
+            idx = next(i for i in par_breaks if i >= sent.end)
+    except StopIteration:
+        # Add the rest of sentences if there are no more newlines
+        output.extend(sent_iter)
+
+    return ''.join(elem.text_with_ws for elem in output)
 
 
 def sgrank(doc, kp_count, window=1500, idf=None):
@@ -188,7 +219,7 @@ def sgrank(doc, kp_count, window=1500, idf=None):
     # Calculate term weights 
     for term in terms:
         term_str = term_strs[id(term)]
-        term_len = len(term)
+        term_len = math.sqrt(len(term))
         term_freq = term_freqs[term_str]
         first_occ = math.log(cutoff_factor / (term.start + 1))
         subsum_count = 0
