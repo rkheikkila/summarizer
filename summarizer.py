@@ -86,7 +86,7 @@ def summarize(text, sent_count=default_sents, kp_count=default_kp, idf=None, sg=
 
 def text_summary(doc, sent_count):
     """
-    Summarizes given text using TextRank algorithm.
+    Summarizes given text using word vectors and graph-based ranking.
 
     Args:
         doc: a spacy.Doc object
@@ -94,16 +94,15 @@ def text_summary(doc, sent_count):
     Returns:
         Text summary
     """
-    sents = list(enumerate(doc.sents))
+    sents = list(doc.sents)
     sent_graph = networkx.Graph()
-    sent_graph.add_nodes_from(idx for idx, sent in sents)
+    sent_graph.add_nodes_from(idx for idx, sent in enumerate(sents))
 
-    for i in sent_graph.nodes_iter():
-        for j in sent_graph.nodes_iter():
-            if i != j and not sent_graph.has_edge(i, j):
-                similarity = sent_similarity(sents[i][1], sents[j][1])
-                if similarity != 0:
-                    sent_graph.add_edge(i, j, weight=similarity)
+    for i, j in it.combinations(sent_graph.nodes_iter(), 2):
+        # Calculate cosine similarity of two sentences transformed to the interval [0,1]
+        similarity = (sents[i].similarity(sents[j]) + 1) / 2
+        if similarity is not 0:
+            sent_graph.add_edge(i, j, weight=similarity)
 
     sent_ranks = networkx.pagerank_scipy(sent_graph)
 
@@ -114,29 +113,9 @@ def text_summary(doc, sent_count):
     top_indices = top_keys(sent_count, sent_ranks)
 
     # Return the key sentences in chronological order
-    top_sents = map(lambda i: sents[i][1], sorted(top_indices))
+    top_sents = map(lambda i: sents[i], sorted(top_indices))
 
     return format_output(doc, list(top_sents))
-
-
-def sent_similarity(sent1, sent2):
-    """
-    Calculates a similary measure between two sentences.
-
-    Args:
-        sent1: a spacy.Span object
-        sent2: a spacy.Span object
-    """
-    s1 = set(normalize(tok) for tok in sent1 if not tok.is_stop)
-    s2 = set(normalize(tok) for tok in sent2 if not tok.is_stop)
-
-    common_words = len(s1 & s2)
-    normalizing_factor = math.log10(len(s1) * len(s2))
-
-    if normalizing_factor == 0:
-        return 0
-
-    return common_words / normalizing_factor
 
 
 def format_output(doc, sents):
