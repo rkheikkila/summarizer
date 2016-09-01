@@ -45,7 +45,7 @@ def summarize_page(url, sent_count=default_sents, kp_count=default_kp):
         text = '\n'.join(paragraphs)
         return summarize(text, sent_count, kp_count)
     except Exception as e:
-        return ("Something went wrong: {}".format(str(e)), [])
+        return "Something went wrong: {}".format(str(e)), []
 
 
 def summarize(text, sent_count=default_sents, kp_count=default_kp, idf=None, sg=True):
@@ -101,7 +101,7 @@ def text_summary(doc, sent_count):
     for i, j in it.combinations(sent_graph.nodes_iter(), 2):
         # Calculate cosine similarity of two sentences transformed to the interval [0,1]
         similarity = (sents[i].similarity(sents[j]) + 1) / 2
-        if similarity is not 0:
+        if similarity != 0:
             sent_graph.add_edge(i, j, weight=similarity)
 
     sent_ranks = networkx.pagerank_scipy(sent_graph)
@@ -184,17 +184,22 @@ def sgrank(doc, kp_count, window=1500, idf=None):
     term_strs = {id(term): normalize(term) for term in terms}
 
     # Count terms and filter by the minimum term frequency
-    term_freqs = {term_str: freq for term_str, freq in
-                  Counter(term_strs[id(term)] for term in terms).items()
+    counts = Counter(term_strs[id(term)] for term in terms)
+    term_freqs = {term_str: freq for term_str, freq in counts.items()
                   if freq >= min_freq}
 
     if idf:
         # For ngrams with n >= 2 we have idf = 1
         modified_tfidf = {term_str: freq * idf[term_str] if ' ' not in term_str else freq
                      for term_str, freq in term_freqs.items()}
-        top_terms = set(top_keys(top_n, modified_tfidf))
     else:
-        top_terms = set(top_keys(top_n, term_freqs))
+        modified_tfidf = term_freqs
+
+    # Take top_n values, but also those that have have equal tfidf with the top_n:th value
+    # This guarantees that the algorithm produces similar results with every run
+    ordered_tfidfs = sorted(modified_tfidf.items(), key=lambda t: t[1], reverse=True)
+    top_n_value = ordered_tfidfs[top_n-1][1]
+    top_terms = set(str for str, val in it.takewhile(lambda t: t[1] >= top_n_value, ordered_tfidfs))
 
     terms = [term for term in terms if term_strs[id(term)] in top_terms]
     term_weights = {}
@@ -204,16 +209,21 @@ def sgrank(doc, kp_count, window=1500, idf=None):
         term_str = term_strs[id(term)]
         term_len = math.sqrt(len(term))
         term_freq = term_freqs[term_str]
-        first_occ = math.log(cutoff_factor / (term.start + 1))
-        subsum_count = 0
-        if term_len > 1:
-            # Sum the frequencies of all other terms that contain this term
-            subsum_count = sum(term_freqs[other] for other in top_terms
-                               if other is not term_str and term_str in other)
+        occ_factor = math.log(cutoff_factor / (term.start + 1))
+        # Sum the frequencies of all other terms that contain this term
+        subsum_count = sum(term_freqs[other] for other in top_terms
+                           if other != term_str and term_str in other)
         freq_diff = term_freq - subsum_count
         if idf and term_len == 1:
             freq_diff *= idf[term_str]
-        term_weights[term_str] = freq_diff * first_occ * term_len
+        weight = freq_diff * occ_factor * term_len
+
+        if term_str in term_weights:
+            # log(1/x) is a decreasing function, so the first occurrence has largest weight
+            if weight > term_weights[term_str]:
+                term_weights[term_str] = weight
+        else:
+            term_weights[term_str] = weight
 
     # Use only positive-weighted terms
     terms = [term for term in terms if term_weights[term_strs[id(term)]] > 0]
@@ -227,24 +237,25 @@ def sgrank(doc, kp_count, window=1500, idf=None):
         if dist <= window:
             t1_str = term_strs[id(t1)]
             t2_str = term_strs[id(t2)]
-            if t1_str is not t2_str:
+            if t1_str != t2_str:
                 num_co_occurrences[t1_str][t2_str] += 1
                 total_log_distance[t1_str][t2_str] += math.log(window / max(1, dist))
 
+    # Weight the graph edges based on word co-occurrences
     edge_weights = defaultdict(lambda: defaultdict(float))
-    for t1, terms in total_log_distance.items():
-        for t2 in terms:
-            edge_weights[t1][t2] = (total_log_distance[t1][t2] / num_co_occurrences[t1][t2]) \
-                                   * term_weights[t1] * term_weights[t2]
+    for t1, neighbors in total_log_distance.items():
+        for n in neighbors:
+            edge_weights[t1][n] = (total_log_distance[t1][n] / num_co_occurrences[t1][n]) \
+                                   * term_weights[t1] * term_weights[n]
 
     # Normalize edge weights by sum of outgoing edge weights
     norm_edge_weights = []
-    for t1, terms in edge_weights.items():
-        weights_sum = sum(terms.values())
-        norm_edge_weights.extend((t1, t2, weight / weights_sum)
-                                 for t2, weight in terms.items())
+    for t1, neighbors in edge_weights.items():
+        weights_sum = sum(neighbors.values())
+        norm_edge_weights.extend((t1, n, weight / weights_sum)
+                                 for n, weight in neighbors.items())
 
-    term_graph = networkx.DiGraph()
+    term_graph = networkx.Graph()
     term_graph.add_weighted_edges_from(norm_edge_weights)
     term_ranks = networkx.pagerank_scipy(term_graph)
 
@@ -253,7 +264,6 @@ def sgrank(doc, kp_count, window=1500, idf=None):
     kp_count = int(kp_count)
 
     top_phrases = top_keys(kp_count, term_ranks)
-
     return top_phrases
 
 
@@ -349,9 +359,9 @@ def normalize(term):
         raise TypeError(msg)
 
 
-def top_keys(n, dict):
+def top_keys(n, d):
     # Helper function for retrieving top n keys in a dictionary
-    return sorted(dict.keys(), key=lambda k: dict[k], reverse=True)[:n]
+    return sorted(d.keys(), key=lambda k: d[k], reverse=True)[:n]
 
 
 
