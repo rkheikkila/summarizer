@@ -198,6 +198,7 @@ def sgrank(doc, kp_count, window=1500, idf=None):
     # Take top_n values, but also those that have have equal tfidf with the top_n:th value
     # This guarantees that the algorithm produces similar results with every run
     ordered_tfidfs = sorted(modified_tfidf.items(), key=lambda t: t[1], reverse=True)
+    top_n = min(top_n, len(ordered_tfidfs))
     top_n_value = ordered_tfidfs[top_n-1][1]
     top_terms = set(str for str, val in it.takewhile(lambda t: t[1] >= top_n_value, ordered_tfidfs))
 
